@@ -8,6 +8,7 @@ import { useHistory } from '../../hooks/useHistory'
 import AndroidSvg from '../../assets/android.svg?react'
 import { toast } from 'kernelsu-alt'
 import { getUad } from '../../lib/uad'
+import { assessPackage } from '../../lib/metadata'
 import { savedIcon } from '../../lib/iconCache'
 import { Cli } from '../../lib/Cli'
 
@@ -101,6 +102,7 @@ export default function AppInfoDialog({ app, onClose }: AppInfoDialogProps) {
 
   const uad = displayApp ? getUad(displayApp.packageName) : null
   const uadText = uad ? uad.description ?? t('removal_desc.none') : ''
+  const assessment = displayApp ? assessPackage(displayApp.packageName) : null
 
   const dialog = (
     <md-dialog ref={dialogRef}>
@@ -154,6 +156,24 @@ export default function AppInfoDialog({ app, onClose }: AppInfoDialogProps) {
             <md-icon class="text-on-surface-variant">content_copy</md-icon>
           </button>
         ))}
+        {assessment && (
+          <div className="rounded-2xl border border-outline-variant p-3 flex flex-col gap-2 text-sm">
+            <strong>Combined removal risk: {t(`removal.${assessment.effective}`)}</strong>
+            {assessment.protected && <p className="font-semibold">Protected core Android component — removal blocked in this fork.</p>}
+            <p className="text-on-surface-variant">UAD-NG: {t(`removal.${assessment.uad}`)} · App Manager ADL: {assessment.adlLevel ? t(`removal.${assessment.adlLevel}`) : 'not listed'}</p>
+            {assessment.disagreement && <p>Sources disagree. The more restrictive classification is used.</p>}
+            {assessment.adl?.warning && <p className="font-semibold whitespace-pre-line">App Manager warning: {assessment.adl.warning}</p>}
+            {assessment.adl?.description && assessment.adl.description !== uad?.description && <p className="whitespace-pre-line">ADL: {assessment.adl.description}</p>}
+            {assessment.dependencies.length > 0 && <p>Depends on: {assessment.dependencies.join(', ')}</p>}
+            {assessment.requiredBy.length > 0 && <p>Required by: {assessment.requiredBy.join(', ')}</p>}
+            {assessment.alternatives.length > 0 && <div>
+              <strong>Open-source alternatives</strong>
+              {assessment.alternatives.map(alt => <p key={alt.id}>{alt.label} ({alt.id}) {alt.repo.startsWith('https://') && <button className="underline" onClick={() => Cli.openLink(alt.repo)}>Project</button>}</p>)}
+            </div>}
+            {assessment.adl?.web?.filter(url => url.startsWith('https://')).slice(0, 5).map(url => <button key={url} className="underline break-all text-left" onClick={() => Cli.openLink(url)}>{url}</button>)}
+            {assessment.sourceRevision && <span className="text-xs text-on-surface-variant">ADL revision: {assessment.sourceRevision.slice(0, 12)}</span>}
+          </div>
+        )}
         {uad && (
           <div
             className="-mx-2 mt-1 box-border flex flex-col gap-1 rounded-2xl py-2 ps-4 pe-0 font-sans"

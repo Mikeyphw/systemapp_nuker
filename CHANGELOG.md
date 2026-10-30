@@ -1,3 +1,8 @@
+### v2.2.6-adl.1
+- Fork: fuse App Manager ADL warnings and dependencies with live UAD-NG ratings.
+- Guard critical package removals and require risk review on config imports.
+- Daily upstream sync and reviewed weekly ADL refresh.
+
 ## App Nuker  
 Simple debloater and whiteout maker with WebUI support.
 

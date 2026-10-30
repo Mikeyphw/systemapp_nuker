@@ -1,7 +1,8 @@
 import { useState, useCallback, useImperativeHandle, forwardRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AppInfo } from '../lib/AppList'
-import { getUad, removalLevels } from '../lib/uad'
+import { removalLevels } from '../lib/uad'
+import { assessPackage } from '../lib/metadata'
 import { useIconObserver } from '../hooks/useIconObserver'
 import AndroidSvg from '../assets/android.svg?react'
 import AppInfoDialog from './dialog/AppInfoDialog'
@@ -82,7 +83,7 @@ const AppList = forwardRef<AppListHandle, AppListProps>(function AppList({ apps,
       app.appLabel.toLowerCase().includes(searchQuery.toLowerCase()) ||
       app.packageName.toLowerCase().includes(searchQuery.toLowerCase())
 
-    const { removal } = getUad(app.packageName)
+    const { effective: removal } = assessPackage(app.packageName)
     const matchesCategory = selectedCategories.length === 0 || selectedCategories.includes(removal)
 
     return {

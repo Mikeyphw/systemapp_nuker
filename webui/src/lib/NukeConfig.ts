@@ -5,6 +5,7 @@ import AppList from './AppList'
 import { Cli } from './Cli'
 import { runMutation } from './mutationLock'
 import { whiteoutManager } from './Whiteout'
+import { loadMetadata, assessPackage } from './metadata'
 import type { useSnackBar } from '../components/SnackBar'
 
 interface NukeConfigData {
@@ -82,6 +83,18 @@ export class NukeConfig {
 
     if (packages.length === 0) {
       snackBar(t('nuke_config.import_empty'), false)
+      return
+    }
+
+    await loadMetadata()
+    // Imported files do not provide interactive per-app risk review. Only
+    // recommended/advanced packages can be imported; risky ones need manual selection.
+    const denied = packages.filter(pkg => {
+      const review = assessPackage(pkg)
+      return review.protected || ['unsafe', 'expert', 'unknown'].includes(review.effective)
+    })
+    if (denied.length) {
+      snackBar(`Import requires manual review for: ${denied.slice(0, 8).join(', ')}${denied.length > 8 ? '…' : ''}`, false)
       return
     }
 

@@ -1,0 +1,54 @@
+name: Refresh App Manager ADL metadata
+on:
+  schedule:
+    - cron: '15 7 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: san-adl-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: github.repository != 'chisewaguri/systemapp_nuker'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch validated ADL
+        working-directory: webui
+        run: node scripts/fetch-adl.cjs
+      - name: Verify classification changes and stage PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- webui/public/adl.json; then
+            echo 'ADL unchanged' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Metadata changes are PR-reviewed: a source can lower a safety rating,
+          # remove entries, or change warnings. Never publish them unattended.
+          git config user.name 'san-metadata[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          SHA="$(node -e "console.log(require('./webui/public/adl.json').sources.adl.revision)")"
+          UAD_SHA="$(node -e "console.log(require('./webui/public/adl.json').sources.uad.revision)")"
+          BRANCH="metadata/adl-${SHA:0:10}-uad-${UAD_SHA:0:10}"
+          gh auth setup-git
+          if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git checkout -b "$BRANCH"
+            git add -f webui/public/adl.json
+            git commit -m "chore(metadata): update ADL to ${SHA:0:12}"
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
+          if ! gh pr list --head "$BRANCH" --state open --json number --jq 'length' | grep -qx '[1-9][0-9]*'; then
+            gh pr create --base master --head "$BRANCH" --title "Review ADL metadata ${SHA:0:12}" --body 'Automated validated refresh of App Manager ADL enrichment. **Manual review required:** compare classification downgrades, removed entries, warnings, and critical packages before merge.'
+          fi

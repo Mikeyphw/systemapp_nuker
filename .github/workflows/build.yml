@@ -86,6 +86,12 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then exit 1; fi
           echo "::warning::uad-ng list download failed, building without app descriptions"
         fi
+        # Enrichment is required for official releases; development builds may
+        # fall back to UAD-NG if the external ADL source is temporarily offline.
+        if ! node scripts/fetch-adl.cjs; then
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then exit 1; fi
+          echo "::warning::ADL metadata unavailable, building without enrichment"
+        fi
         pnpm build
 
     - name: Extract changelog for version

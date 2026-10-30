@@ -504,9 +504,29 @@ install_dummy() {
     fi
 }
 
+# Static, defense-in-depth guard. Only blocks NEW additions, never existing
+# removals or restorations. Keep in sync with webui/src/lib/metadata.ts.
+guard_new_critical_packages() {
+    [ -s "$REMOVE_LIST" ] || return 0
+    for package_name in $(grep -Ev '^$|^#' "$REMOVE_LIST" | awk '{print $1}'); do
+        case "$package_name" in
+            android|com.android.systemui|com.android.settings|com.android.packageinstaller|com.google.android.packageinstaller|com.android.permissioncontroller|com.google.android.permissioncontroller|com.android.providers.settings|com.android.providers.media|com.google.android.providers.media.module|com.android.externalstorage|com.android.phone|com.android.server.telecom|com.android.networkstack|com.google.android.networkstack|com.android.inputdevices)
+                if [ -f "$REMOVE_LIST.old" ] && awk -v pkg="$package_name" '$1 == pkg { found=1 } END { exit !found }' "$REMOVE_LIST.old"; then
+                    continue
+                fi
+                echo "refusing newly added critical package: $package_name" >&2
+                return 1
+                ;;
+        esac
+    done
+    return 0
+}
+
 # ----- if called from webui -----
 
 # lets have customize.sh of dummy.zip call us.
+guard_new_critical_packages || exit 1
+
 if [ ! "$DUMMYZIP" = "true" ] && [ ! "$update" = true ]; then
     for list in "$REMOVE_LIST" "$PERSIST_DIR/raw_whiteouts.txt"; do
         [ -f "$list.boot" ] || replace_file "$list.old" "$list.boot" || exit 1

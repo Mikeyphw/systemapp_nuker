@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import Header from '../components/Header'
 import SearchBar from '../components/SearchBar'
-import { getUad, removalCounts } from '../lib/uad'
+import { loadMetadata, assessPackage, removalCountsCombined, isRemovalBlocked } from '../lib/metadata'
 import AppList, { type AppListHandle } from '../components/AppList'
 import { type AppInfo } from '../lib/AppList'
 import { useAppList } from '../lib/AppListContext'
@@ -26,6 +26,9 @@ export default function Home() {
   const [selectedCategories, setSelectedCategories] = useState<string[]>([])
   const appListRef = useRef<AppListHandle>(null)
   const [risky, setRisky] = useState<AppInfo[]>([])
+  const [, setMetadataLoaded] = useState(false)
+
+  useEffect(() => { void loadMetadata().then(() => setMetadataLoaded(true)) }, [])
 
   useEffect(() => {
     appListManager.waitForReady().then(() => {
@@ -78,13 +81,19 @@ export default function Home() {
     if (!started) showSnackBar(t('global.processing'), true, 3000)
   }, [appListManager, showSnackBar, t])
 
-  const handleFabClick = useCallback(() => {
+  const handleFabClick = useCallback(async () => {
+    await loadMetadata()
     const selected = appListRef.current?.getSelectedPackages() ?? []
+    const blocked = selected.filter(isRemovalBlocked)
+    if (blocked.length) {
+      showSnackBar(`Protected Android components cannot be removed: ${blocked.join(', ')}`, false)
+      return
+    }
     const flagged = appListManager.systemAppList.filter(app =>
-      selected.includes(app.packageName) && ['expert', 'unsafe'].includes(getUad(app.packageName).removal))
+      selected.includes(app.packageName) && ['expert', 'unsafe', 'unknown'].includes(assessPackage(app.packageName).effective))
     if (flagged.length > 0) setRisky(flagged)
     else applyNuke()
-  }, [appListManager, applyNuke])
+  }, [appListManager, applyNuke, showSnackBar])
 
   const toggleCategory = (categoryId: string) => {
     setSelectedCategories(prev =>
@@ -115,7 +124,7 @@ export default function Home() {
             <SearchBar
               value={searchQuery}
               onChange={setSearchQuery}
-              filter={{ selected: selectedCategories, onToggle: toggleCategory, counts: removalCounts(apps) }}
+              filter={{ selected: selectedCategories, onToggle: toggleCategory, counts: removalCountsCombined(apps) }}
             />
           </>
         }
@@ -138,8 +147,9 @@ export default function Home() {
         <div slot="headline">{t('home.risky_title')}</div>
         <div slot="content">
           {t('home.risky_message', { count: risky.length })}
+          <p className="mt-2 text-sm">Unknown packages also require review. ADL and UAD-NG recommendations may differ; an explicit warning does not guarantee safety.</p>
           <ul className="mt-2 list-disc pl-5">
-            {risky.map(app => <li key={app.packageName}>{app.appLabel} ({t(`removal.${getUad(app.packageName).removal}`)})</li>)}
+            {risky.map(app => <li key={app.packageName}>{app.appLabel} ({t(`removal.${assessPackage(app.packageName).effective}`)})</li>)}
           </ul>
         </div>
         <div slot="actions">

@@ -129,6 +129,7 @@ test('app list filter matches apps by uad-ng removal level and unlisted apps by 
       getUad: pkg => ({ removal: levels[pkg] ?? 'unknown', description: null }),
       removalLevels: [{ id: 'recommended', color: 'g' }, { id: 'unsafe', color: 'r' }, { id: 'unknown', color: 'x' }],
     },
+    '../lib/metadata': { assessPackage: pkg => ({ effective: levels[pkg] ?? 'unknown' }) },
     '../hooks/useIconObserver': { useIconObserver: () => ({ current: null }) },
     '../assets/android.svg?react': () => null,
     './dialog/AppInfoDialog': () => null,

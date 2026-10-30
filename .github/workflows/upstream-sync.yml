@@ -1,0 +1,104 @@
+name: Sync compatible Nuker upstream changes
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+concurrency:
+  group: san-upstream-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.repository != 'chisewaguri/systemapp_nuker'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Get upstream commit and attempt non-destructive merge
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'san-sync[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/chisewaguri/systemapp_nuker.git
+          git fetch --no-tags upstream master
+          SHA="$(git rev-parse upstream/master)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git merge --no-edit --no-ff upstream/master; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort || true
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'conflict=true' >> "$GITHUB_OUTPUT"
+            printf 'Upstream merge conflicted at %s\n' "$SHA" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Report merge conflict
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          SHORT="${SHA:0:12}"
+          if ! gh issue list --state open --search "Upstream sync $SHORT in:title" --json number --jq 'length' | grep -qx '[1-9][0-9]*'; then
+            gh issue create --title "Upstream sync $SHORT: merge conflict" --body "Automatic merge failed at chisewaguri/systemapp_nuker@$SHA. Resolve conflicts manually; fork main remains unchanged." || true
+          fi
+      - uses: pnpm/action-setup@v4
+        if: steps.merge.outputs.changed == 'true'
+        with:
+          version: 'latest'
+      - uses: actions/setup-node@v4
+        if: steps.merge.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: webui/pnpm-lock.yaml
+      - name: Verify merged branch before publishing
+        if: steps.merge.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shellcheck -s sh -S error module/*.sh module/dummy_zip/customize.sh
+          pnpm --dir webui install --frozen-lockfile
+          pnpm --dir webui test
+          pnpm --dir webui lint
+          (cd webui && node scripts/fetch-uad.cjs && node scripts/fetch-adl.cjs && pnpm build)
+      - name: Push verified, non-forced merge (or open PR if branch protected)
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.merge.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Do not expose a write credential while running upstream code or tests.
+          # Enable GitHub CLI credentials only after all validation has passed.
+          gh auth setup-git
+          # push without --force; if main advanced concurrently, push fails safely
+          if git push origin HEAD:master; then
+            echo 'Validated upstream merge applied to master.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          SHORT="${SHA:0:12}"
+          BRANCH="sync/upstream-${SHORT}"
+          if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git push origin "HEAD:refs/heads/${BRANCH}"
+          fi
+          URL="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
+          if [ -z "$URL" ]; then
+            URL="$(gh pr create --base master --head "$BRANCH" --title "Sync upstream $SHORT" --body "Upstream merge succeeded locally and passed shellcheck, tests, lint and WebUI build. Direct push was denied or fork main moved. Please verify branch protection checks before merging.")"
+          fi
+          echo "PR: $URL" >> "$GITHUB_STEP_SUMMARY"
+          gh pr merge "$URL" --auto --merge || true
