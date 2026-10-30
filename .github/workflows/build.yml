@@ -125,20 +125,35 @@ jobs:
         zip -r dummy.zip *
         mv dummy.zip ../
         
-    - name: Create module zip for release
-      if: github.ref_type == 'tag'
+    - name: Build and validate installable module ZIP
+      shell: bash
       run: |
-        cd module
-        zip -r "${{ env.RELEASE_ZIP_NAME }}.zip" *
-        mv "${{ env.RELEASE_ZIP_NAME }}.zip" ../
+        set -euo pipefail
+        # Tags get a stable release filename; branches get a traceable CI filename.
+        INSTALL_ZIP="${ZIP_NAME}.zip"
+        if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+          INSTALL_ZIP="${RELEASE_ZIP_NAME}.zip"
+        fi
+        echo "INSTALL_ZIP=$INSTALL_ZIP" >> "$GITHUB_ENV"
+        test -s module/module.prop
+        test -s module/dummy.zip
+        test -s module/webroot/index.html
+        test -s module/webroot/uad.json
+        test -s module/webroot/adl.json
+        (
+          cd module
+          chmod 755 ./*.sh META-INF/com/google/android/update-binary
+          zip -qr "../$INSTALL_ZIP" * -x 'dummy_zip' 'dummy_zip/*'
+        )
+        python3 tests/verify_module_zip.py "$INSTALL_ZIP" --expected-version "$VERSION"
 
     - name: Upload artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: ${{ env.ZIP_NAME }}
-        path: |
-          module/
-          !module/dummy_zip
+        # GitHub's artifact ZIP wraps one installable module ZIP.
+        # Download with `gh run download` to extract the inner installer.
+        path: ${{ env.INSTALL_ZIP }}
 
     - name: Create release
       if: github.ref_type == 'tag'
@@ -148,4 +163,4 @@ jobs:
         name: ${{ env.VERSION }}
         body: ${{ env.CHANGELOG }}
         draft: false
-        files: ${{ env.RELEASE_ZIP_NAME }}.zip
+        files: ${{ env.INSTALL_ZIP }}
