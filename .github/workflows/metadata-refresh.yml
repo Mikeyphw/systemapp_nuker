@@ -1,4 +1,4 @@
-name: Refresh App Manager ADL metadata
+name: Refresh reviewed UAD-NG and App Manager ADL metadata
 on:
   schedule:
     - cron: '15 7 * * 1'
@@ -6,8 +6,9 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 concurrency:
-  group: san-adl-refresh
+  group: san-metadata-refresh
   cancel-in-progress: false
 jobs:
   refresh:
@@ -19,36 +20,54 @@ jobs:
           ref: master
           fetch-depth: 0
           persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 'latest'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Fetch validated ADL
+          cache: pnpm
+          cache-dependency-path: webui/pnpm-lock.yaml
+      - name: Install pinned build dependencies
+        run: pnpm --dir webui install --frozen-lockfile
+      - name: Produce fresh validated source snapshots
         working-directory: webui
-        run: node scripts/fetch-adl.cjs
-      - name: Verify classification changes and stage PR
+        run: |
+          node scripts/fetch-uad.cjs
+          node scripts/fetch-adl.cjs
+          node scripts/verify-databases.cjs
+      - name: Stage review PR when snapshots change
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- webui/public/adl.json; then
-            echo 'ADL unchanged' >> "$GITHUB_STEP_SUMMARY"
+          if git diff --quiet -- webui/public/adl.json webui/public/uad.json; then
+            echo 'Reviewed metadata snapshots are already current.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # Metadata changes are PR-reviewed: a source can lower a safety rating,
-          # remove entries, or change warnings. Never publish them unattended.
+          echo '## Metadata changes (review required)' >> "$GITHUB_STEP_SUMMARY"
+          git diff --stat -- webui/public/adl.json webui/public/uad.json >> "$GITHUB_STEP_SUMMARY"
           git config user.name 'san-metadata[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          SHA="$(node -e "console.log(require('./webui/public/adl.json').sources.adl.revision)")"
+          ADL_SHA="$(node -e "console.log(require('./webui/public/adl.json').sources.adl.revision)")"
           UAD_SHA="$(node -e "console.log(require('./webui/public/adl.json').sources.uad.revision)")"
-          BRANCH="metadata/adl-${SHA:0:10}-uad-${UAD_SHA:0:10}"
+          SNAP_ID="$(sha256sum webui/public/adl.json webui/public/uad.json | sha256sum | cut -c1-12)"
+          BRANCH="metadata/refresh-${SNAP_ID}"
           gh auth setup-git
           if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             git checkout -b "$BRANCH"
-            git add -f webui/public/adl.json
-            git commit -m "chore(metadata): update ADL to ${SHA:0:12}"
+            git add webui/public/adl.json webui/public/uad.json
+            git commit -m "chore(metadata): reviewed candidate ${SNAP_ID}"
             git push origin "HEAD:refs/heads/$BRANCH"
           fi
-          if ! gh pr list --head "$BRANCH" --state open --json number --jq 'length' | grep -qx '[1-9][0-9]*'; then
-            gh pr create --base master --head "$BRANCH" --title "Review ADL metadata ${SHA:0:12}" --body 'Automated validated refresh of App Manager ADL enrichment. **Manual review required:** compare classification downgrades, removed entries, warnings, and critical packages before merge.'
+          URL="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
+          if [ -z "$URL" ]; then
+            URL="$(gh pr create --base master --head "$BRANCH" \
+              --title "Review UAD-NG / ADL metadata ${SNAP_ID}" \
+              --body "Candidate UAD-NG ${UAD_SHA:0:12}, ADL ${ADL_SHA:0:12}. **Manual review required.** Inspect removals, rating downgrades, missing entries, warnings, dependencies, and ROM-specific critical packages before merging. The build uses only committed reviewed data.")"
           fi
+          echo "Review PR: $URL" >> "$GITHUB_STEP_SUMMARY"
+          # PRs and branch pushes made with GITHUB_TOKEN do not normally fire
+          # a second push/PR workflow. Dispatch the candidate build explicitly.
+          gh workflow run build.yml --ref "$BRANCH"

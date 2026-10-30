@@ -83,17 +83,9 @@ jobs:
       run: |
         cd webui
         pnpm lint
-        # releases must ship app descriptions, other builds can go without them
-        if ! node scripts/fetch-uad.cjs; then
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then exit 1; fi
-          echo "::warning::uad-ng list download failed, building without app descriptions"
-        fi
-        # Enrichment is required for official releases; development builds may
-        # fall back to UAD-NG if the external ADL source is temporarily offline.
-        if ! node scripts/fetch-adl.cjs; then
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then exit 1; fi
-          echo "::warning::ADL metadata unavailable, building without enrichment"
-        fi
+        # Build from reviewed, Git-tracked snapshots; never silently fetch
+        # newer metadata while producing an APK/module or signed release.
+        node scripts/verify-databases.cjs
         pnpm build
 
     - name: Extract changelog for version

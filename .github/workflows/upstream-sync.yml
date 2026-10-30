@@ -74,7 +74,7 @@ jobs:
           pnpm --dir webui install --frozen-lockfile
           pnpm --dir webui test
           pnpm --dir webui lint
-          (cd webui && node scripts/fetch-uad.cjs && node scripts/fetch-adl.cjs && pnpm build)
+          (cd webui && node scripts/verify-databases.cjs && pnpm build)
       - name: Push verified, non-forced merge (or open PR if branch protected)
         if: steps.merge.outputs.changed == 'true'
         env:
