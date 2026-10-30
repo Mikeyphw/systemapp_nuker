@@ -94,6 +94,8 @@ for (const baseline of ['', 'com.boot /system/app/Boot/Boot.apk Boot\n']) {
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
     const source = fs.readFileSync(path.join(root, '../module/nuke.sh'), 'utf8')
     const replace = source.match(/replace_file\(\) \{[\s\S]*?\n\}/)[0]
+    // An isolated transaction test must define every helper used by the real script.
+    const guard = source.match(/guard_new_critical_packages\(\) \{[\s\S]*?\n\}/)[0]
     const transaction = source.split('# lets have customize.sh of dummy.zip call us.')[1].split('\nif [ "$update" = true ]; then')[0]
     const persist = `${dir}/persist`
     const staged = `${dir}/modules_update/module`
@@ -107,6 +109,7 @@ REMOVE_LIST="$PERSIST_DIR/nuke_list.txt"
 MODULE_UPDATE_DIR='${staged}'
 update=false
 ${replace}
+${guard}
 prepare_nuke_list() { return 0; }
 reinstall_unlisted() { return 0; }
 install_dummy() {
@@ -226,3 +229,25 @@ exit 0
     assert.match(fs.readFileSync(`${persist}/pm_uninstalled.txt`, 'utf8'), /com.new/)
   })
 }
+
+
+test('production guard rejects newly selected critical packages but preserves existing selections', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'san-guard-fixture-')).replace(/\\/g, '/')
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const source = fs.readFileSync(path.join(root, '../module/nuke.sh'), 'utf8')
+  const guard = source.match(/guard_new_critical_packages\(\) \{[\s\S]*?\n\}/)[0]
+  const target = `${dir}/nuke_list.txt`
+  const check = (next, before) => {
+    fs.writeFileSync(target, next)
+    if (before === null) fs.rmSync(`${target}.old`, { force: true })
+    else fs.writeFileSync(`${target}.old`, before)
+    const result = spawnSync(shell, ['-c', `${guard}\nREMOVE_LIST='${target}'\nguard_new_critical_packages`], { encoding: 'utf8' })
+    if (result.error) throw result.error
+    return result
+  }
+  assert.equal(check('com.example.clean  Example\n', null).status, 0)
+  const denied = check('com.android.systemui  System UI\n', null)
+  assert.equal(denied.status, 1)
+  assert.match(denied.stderr, /refusing newly added critical package: com\.android\.systemui/)
+  assert.equal(check('com.android.systemui  System UI\n', 'com.android.systemui  System UI\n').status, 0)
+})
